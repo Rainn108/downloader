@@ -1,61 +1,60 @@
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Download, Music, Video, Image as ImageIcon, Loader2, Link as LinkIcon, Share2, Heart, MessageCircle, X, PlayCircle, Facebook, Instagram, Youtube } from 'lucide-react';
 
-// --- OPTIMASI 1: PISAHKAN MODAL CONTENT ---
-// Pakai memo supaya konten gak render ulang pas modal lagi gerak/animasi
-const ModalContent = memo(({ data, downloadFile, activePreview, setActivePreview, mediaError, setMediaError }) => {
+// --- OPTIMASI 1: MODAL CONTENT (Super Fast Render) ---
+const ModalContent = memo(({ data, downloadFile }) => {
   if (!data) return null;
 
-  // Logic renderContent dipindah ke sini lur
-  // Contoh untuk data Tiktok/Video
-  if (data.author && data.stats) {
-    const noWmVideo = data.data.find(item => item.type === 'nowatermark' || item.type === 'nowatermark_hd');
+  // Render untuk format YouTube/Video General (Sesuai screenshot lo)
+  if (data.results) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-          <img src={data.author.avatar} alt="avatar" className="w-12 h-12 rounded-full" />
-          <div>
-            <h3 className="font-bold text-slate-900">{data.author.nickname}</h3>
-            <p className="text-xs text-slate-500">@{data.author.unique_id}</p>
+      <div className="flex flex-col gap-4">
+        <div className="relative rounded-2xl overflow-hidden bg-slate-100 aspect-video group shadow-inner">
+          <img src={data.preview} alt="preview" className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-black/30 flex items-end p-4">
+            <h3 className="text-white text-sm font-bold line-clamp-2 leading-tight">
+              {data.title || data.caption}
+            </h3>
           </div>
         </div>
         
-        <div className="rounded-2xl overflow-hidden bg-black aspect-video relative">
-            {activePreview === 'tiktok' ? (
-                <video controls autoPlay className="w-full h-full" src={noWmVideo?.url} />
-            ) : (
-                <div className="relative h-full w-full" onClick={() => setActivePreview('tiktok')}>
-                    <img src={data.cover} className="w-full h-full object-cover opacity-60" alt="cover" />
-                    <PlayCircle className="absolute inset-0 m-auto text-white opacity-80" size={50} />
+        <div className="space-y-2">
+          {data.results.map((res, idx) => (
+            <button
+              key={idx}
+              onClick={() => downloadFile(res.url, data.title, res.type)}
+              className="w-full flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${res.type === 'mp3' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
+                  {res.type === 'mp3' ? <Music size={18} /> : <Video size={18} />}
                 </div>
-            )}
+                <div className="text-left">
+                  <span className="block font-bold text-slate-800 text-xs uppercase">{res.type}</span>
+                  <span className="text-[10px] text-slate-500 font-medium uppercase">{res.quality}</span>
+                </div>
+              </div>
+              <Download size={18} className="text-slate-400 group-hover:text-blue-600 transition-colors" />
+            </button>
+          ))}
         </div>
-
-        <button 
-          onClick={() => downloadFile(noWmVideo?.url, data.title, 'mp4')}
-          className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-blue-200"
-        >
-          <Download size={20} /> Download Video No WM
-        </button>
       </div>
     );
   }
 
-  // Tambahin logic render untuk format lain (Pinterest/Instagram) di sini...
-  return <div className="text-center p-10 text-slate-400">Format didukung.</div>;
+  // Fallback untuk format lain...
+  return <div className="text-center py-10 text-slate-400 font-medium">Content Ready to Download</div>;
 });
 
-// --- OPTIMASI 2: PROGRESS BAR TERPISAH ---
+// --- OPTIMASI 2: PROGRESS BAR ---
 const ProgressBar = memo(({ progress }) => (
   <div className="mt-3 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-    <motion.div 
-      className="h-full bg-blue-600"
-      initial={{ width: 0 }}
-      animate={{ width: `${progress}%` }}
-      transition={{ ease: "easeOut", duration: 0.3 }}
+    <div 
+      className="h-full bg-blue-600 transition-all duration-300 ease-out"
+      style={{ width: `${progress}%` }}
     />
   </div>
 ));
@@ -65,23 +64,9 @@ export default function Home({ triggerAd }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [data, setData] = useState(null);
-  const [activePreview, setActivePreview] = useState(null);
-  const [mediaError, setMediaError] = useState(false);
   const cache = useRef({});
 
-  useEffect(() => {
-    let interval;
-    if (loading) {
-      setProgress(10);
-      interval = setInterval(() => {
-        setProgress(p => p < 90 ? p + 5 : p);
-      }, 400);
-    } else {
-      setProgress(0);
-    }
-    return () => clearInterval(interval);
-  }, [loading]);
-
+  // Logic Search tetap sama tapi lebih strict
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!url || loading) return;
@@ -92,21 +77,112 @@ export default function Home({ triggerAd }) {
     }
 
     setLoading(true);
+    setProgress(20);
     try {
-      const response = await axios.post('/api/download', { url });
-      if (response.data.success) {
-        cache.current[url] = response.data.data;
+      const { data: res } = await axios.post('/api/download', { url });
+      if (res.success) {
         setProgress(100);
+        cache.current[url] = res.data;
         setTimeout(() => {
-          setData(response.data.data);
+          setData(res.data);
           setLoading(false);
-        }, 300);
+        }, 200); // Delay minimal biar gak kaget
       }
     } catch (err) {
       setLoading(false);
-      Swal.fire({ icon: 'error', title: 'Gagal', text: 'Link tidak valid atau server sibuk.' });
+      Swal.fire({ icon: 'error', title: 'Oops!', text: 'Gagal memproses link.' });
     }
   };
+
+  const downloadFile = (fileUrl, prefix, ext) => {
+    const startDownload = () => {
+      const filename = `${prefix?.replace(/\s+/g, '_').substring(0, 20)}.${ext}`;
+      window.open(`/api/proxy?url=${encodeURIComponent(fileUrl)}&filename=${filename}`, '_blank');
+    };
+    triggerAd ? triggerAd(startDownload) : startDownload();
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4">
+      {/* Background Decor */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-100/40 rounded-full blur-[120px]" />
+      </div>
+
+      <main className="w-full max-w-lg z-10">
+        <div className="text-center mb-10">
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight">Media Saver</h1>
+          <p className="text-slate-500 font-medium">Paste. Download. Done.</p>
+        </div>
+
+        <div className="bg-white p-2 rounded-2xl shadow-2xl shadow-blue-900/5 border border-slate-100">
+          <form onSubmit={handleSearch} className="relative flex items-center">
+            <input 
+              type="text" 
+              placeholder="https://..."
+              className="w-full p-4 pl-6 pr-14 outline-none font-medium text-slate-800 placeholder:text-slate-300"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <button className="absolute right-2 p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 active:scale-95 transition-all">
+              {loading ? <Loader2 className="animate-spin" size={20} /> : <Search size={20} />}
+            </button>
+          </form>
+          {loading && <ProgressBar progress={progress} />}
+        </div>
+      </main>
+
+      {/* POPUP DOWNLOAD (FIX DESKTOP CENTER & MOBILE SLIDE) */}
+      <AnimatePresence>
+        {data && (
+          <>
+            {/* Backdrop dengan blur minimal biar enteng */}
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setData(null)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60]"
+            />
+            
+            <motion.div
+              initial={{ y: "100%", opacity: 0.5 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: "100%", opacity: 0 }}
+              transition={{ type: "spring", damping: 30, stiffness: 400 }}
+              className={`
+                fixed z-[70] bg-white shadow-2xl transform-gpu will-change-transform
+                /* Mobile: Full Width di Bawah */
+                bottom-0 left-0 right-0 rounded-t-[32px]
+                /* Desktop: Center-Center */
+                md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 
+                md:w-full md:max-w-md md:rounded-[32px]
+                max-h-[90vh] overflow-hidden flex flex-col
+              `}
+            >
+              {/* Handle Bar (Mobile Only) */}
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mt-4 mb-2 md:hidden" />
+
+              <div className="p-6 overflow-y-auto custom-scrollbar">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest">Preview Media</h2>
+                  <button onClick={() => setData(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                    <X size={20} className="text-slate-500" />
+                  </button>
+                </div>
+                
+                <ModalContent data={data} downloadFile={downloadFile} />
+              </div>
+
+              {/* Safe area filler for mobile */}
+              <div className="h-6 md:hidden" />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
   const downloadFile = (fileUrl, prefix, ext) => {
     const execute = () => {
