@@ -1,150 +1,329 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Download, Music, Video, Image as ImageIcon, Loader2, Link as LinkIcon, Share2, Heart, MessageCircle, X, PlayCircle, Facebook, Instagram, Youtube } from 'lucide-react';
-
-// --- OPTIMASI 1: MODAL CONTENT (Super Fast Render) ---
-const ModalContent = memo(({ data, downloadFile }) => {
-  if (!data) return null;
-
-  // Render untuk format YouTube/Video General (Sesuai screenshot lo)
-  if (data.results) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="relative rounded-2xl overflow-hidden bg-slate-100 aspect-video group shadow-inner">
-          <img src={data.preview} alt="preview" className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-black/30 flex items-end p-4">
-            <h3 className="text-white text-sm font-bold line-clamp-2 leading-tight">
-              {data.title || data.caption}
-            </h3>
-          </div>
-        </div>
-        
-        <div className="space-y-2">
-          {data.results.map((res, idx) => (
-            <button
-              key={idx}
-              onClick={() => downloadFile(res.url, data.title, res.type)}
-              className="w-full flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all group"
-            >
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${res.type === 'mp3' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
-                  {res.type === 'mp3' ? <Music size={18} /> : <Video size={18} />}
-                </div>
-                <div className="text-left">
-                  <span className="block font-bold text-slate-800 text-xs uppercase">{res.type}</span>
-                  <span className="text-[10px] text-slate-500 font-medium uppercase">{res.quality}</span>
-                </div>
-              </div>
-              <Download size={18} className="text-slate-400 group-hover:text-blue-600 transition-colors" />
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // Fallback untuk format lain...
-  return <div className="text-center py-10 text-slate-400 font-medium">Content Ready to Download</div>;
-});
-
-// --- OPTIMASI 2: PROGRESS BAR ---
-const ProgressBar = memo(({ progress }) => (
-  <div className="mt-3 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-    <div 
-      className="h-full bg-blue-600 transition-all duration-300 ease-out"
-      style={{ width: `${progress}%` }}
-    />
-  </div>
-));
+import { 
+  Search, Download, Music, Video, Image as ImageIcon, 
+  Loader2, Link as LinkIcon, Share2, Heart, 
+  MessageCircle, X, PlayCircle, Facebook, 
+  Instagram, Youtube, Sparkles 
+} from 'lucide-react';
 
 export default function Home({ triggerAd }) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [data, setData] = useState(null);
-  const cache = useRef({});
+  const [cache, setCache] = useState({});
+  const [activePreview, setActivePreview] = useState(null);
+  const [mediaError, setMediaError] = useState(false);
 
-  // Logic Search tetap sama tapi lebih strict
+  // Animasi Progress Bar yang lebih smooth
+  useEffect(() => {
+    let interval;
+    if (loading) {
+      setProgress(10);
+      interval = setInterval(() => {
+        setProgress((prev) => (prev < 95 ? prev + (95 - prev) * 0.1 : prev));
+      }, 200);
+    } else {
+      setProgress(0);
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  useEffect(() => {
+    if (data) {
+      setMediaError(false);
+      setActivePreview(null);
+    }
+  }, [data]);
+
+  const sanitizeFilename = (name) => {
+    if (!name) return `media_${Date.now()}`;
+    return name.replace(/[^a-zA-Z0-9\s-_]/g, '').trim().replace(/\s+/g, '_').substring(0, 60) || `media_${Date.now()}`;
+  };
+
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!url || loading) return;
-
-    if (cache.current[url]) {
-      setData(cache.current[url]);
+    if (!url) return;
+    if (cache[url]) {
+      setData(cache[url]);
       return;
     }
 
     setLoading(true);
-    setProgress(20);
+    setData(null);
+
     try {
-      const { data: res } = await axios.post('/api/download', { url });
-      if (res.success) {
-        setProgress(100);
-        cache.current[url] = res.data;
-        setTimeout(() => {
-          setData(res.data);
-          setLoading(false);
-        }, 200); // Delay minimal biar gak kaget
-      }
-    } catch (err) {
+      const response = await axios.post('/api/download', { url });
+      setProgress(100);
+      
+      setTimeout(() => {
+        if (response.data.success) {
+          const resultData = response.data.data;
+          setData(resultData);
+          setCache(prev => ({ ...prev, [url]: resultData }));
+        }
+        setLoading(false);
+      }, 600);
+    } catch (error) {
       setLoading(false);
-      Swal.fire({ icon: 'error', title: 'Oops!', text: 'Gagal memproses link.' });
+      Swal.fire({
+        icon: 'error',
+        title: 'Oops!',
+        text: error.response?.data?.error || 'Link tidak valid atau server sedang sibuk.',
+        confirmButtonColor: '#6366f1',
+        background: '#ffffff',
+        customClass: { popup: 'rounded-3xl' }
+      });
     }
   };
 
+  const executeDownload = (fileUrl, prefix, ext) => {
+    const filename = `${sanitizeFilename(prefix)}.${ext}`;
+    const link = document.createElement('a');
+    link.href = `/api/proxy?url=${encodeURIComponent(fileUrl)}&filename=${filename}`;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const downloadFile = (fileUrl, prefix, ext) => {
-    const startDownload = () => {
-      const filename = `${prefix?.replace(/\s+/g, '_').substring(0, 20)}.${ext}`;
-      window.open(`/api/proxy?url=${encodeURIComponent(fileUrl)}&filename=${filename}`, '_blank');
-    };
-    triggerAd ? triggerAd(startDownload) : startDownload();
+    if (triggerAd) {
+      triggerAd(() => executeDownload(fileUrl, prefix, ext));
+    } else {
+      executeDownload(fileUrl, prefix, ext);
+    }
+  };
+
+  // Variants untuk animasi yang lebih organik
+  const containerVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { 
+      opacity: 1, 
+      y: 0,
+      transition: { duration: 0.6, staggerChildren: 0.1 }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, scale: 0.95 },
+    visible: { opacity: 1, scale: 1, transition: { type: 'spring', damping: 20 } }
+  };
+
+  const renderContent = () => {
+    if (!data) return null;
+
+    // Spotify/Music Style
+    if (data.metadata && data.download) {
+      return (
+        <div className="space-y-6">
+          <div className="flex flex-col items-center text-center space-y-4">
+            <motion.div 
+              whileHover={{ rotate: 5, scale: 1.05 }}
+              className="relative w-48 h-48"
+            >
+              <img src={data.metadata.images} className="w-full h-full rounded-3xl shadow-2xl object-cover" alt="Cover" />
+              <div className="absolute -bottom-2 -right-2 bg-indigo-600 p-3 rounded-2xl shadow-lg">
+                <Music className="text-white" size={24} />
+              </div>
+            </motion.div>
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800">{data.metadata.title}</h2>
+              <p className="text-indigo-500 font-semibold">{data.metadata.artist}</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+             <audio controls className="w-full" src={data.download} />
+          </div>
+
+          <button
+            onClick={() => downloadFile(data.download, `${data.metadata.artist} - ${data.metadata.title}`, 'mp3')}
+            className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-3"
+          >
+            <Download size={20} /> Unduh MP3
+          </button>
+        </div>
+      );
+    }
+
+    // TikTok Style
+    if (data.author && data.stats) {
+      const noWmVideo = data.data.find(item => item.type === 'nowatermark' || item.type === 'nowatermark_hd');
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center gap-4 p-4 bg-white rounded-2xl shadow-sm border border-slate-100">
+            <img src={data.author.avatar} className="w-14 h-14 rounded-full border-2 border-indigo-100" />
+            <div className="flex-1">
+              <h3 className="font-bold text-slate-800">@{data.author.unique_id}</h3>
+              <p className="text-xs text-slate-500">{data.author.nickname}</p>
+            </div>
+          </div>
+
+          <div className="aspect-[9/16] max-h-[500px] bg-black rounded-3xl overflow-hidden relative group shadow-2xl mx-auto">
+            {activePreview === 'tiktok' ? (
+              <video src={noWmVideo?.url} controls autoPlay className="w-full h-full object-contain" />
+            ) : (
+              <div className="relative w-full h-full cursor-pointer" onClick={() => setActivePreview('tiktok')}>
+                <img src={data.cover} className="w-full h-full object-cover opacity-80" />
+                <PlayCircle size={64} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white/90" />
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={() => downloadFile(noWmVideo?.url, data.title, 'mp4')}
+              className="py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all"
+            >
+              <Video size={20} /> Video
+            </button>
+            <button
+              onClick={() => downloadFile(data.data.find(i => i.type === 'audio')?.url, data.title, 'mp3')}
+              className="py-4 bg-indigo-50 text-indigo-600 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-100 transition-all"
+            >
+              <Music size={20} /> Audio
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return <div className="text-center py-10 text-slate-400">Format didukung, memproses tampilan...</div>;
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4">
-      {/* Background Decor */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-100/40 rounded-full blur-[120px]" />
+    <div className="min-h-screen bg-[#FDFDFF] text-slate-900 selection:bg-indigo-100">
+      {/* Background Ornaments */}
+      <div className="fixed inset-0 overflow-hidden -z-10">
+        <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-50 rounded-full blur-[120px] opacity-60" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[400px] h-[400px] bg-purple-50 rounded-full blur-[100px] opacity-60" />
       </div>
 
-      <main className="w-full max-w-lg z-10">
-        <div className="text-center mb-10">
-          <h1 className="text-4xl font-black text-slate-900 tracking-tight">Media Saver</h1>
-          <p className="text-slate-500 font-medium">Paste. Download. Done.</p>
-        </div>
+      <main className="max-w-2xl mx-auto px-6 pt-20 pb-32">
+        <motion.div 
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          className="space-y-12"
+        >
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <motion.div 
+              initial={{ scale: 0 }} 
+              animate={{ scale: 1 }} 
+              className="inline-block p-4 bg-white shadow-xl shadow-indigo-100 rounded-[2rem] text-indigo-600 mb-2"
+            >
+              <Sparkles size={32} fill="currentColor" className="opacity-20" />
+            </motion.div>
+            <h1 className="text-5xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 via-indigo-900 to-slate-900">
+              Media Saver
+            </h1>
+            <p className="text-slate-500 font-medium">Download video & musik favorit tanpa ribet.</p>
+          </div>
 
-        <div className="bg-white p-2 rounded-2xl shadow-2xl shadow-blue-900/5 border border-slate-100">
-          <form onSubmit={handleSearch} className="relative flex items-center">
-            <input 
-              type="text" 
-              placeholder="https://..."
-              className="w-full p-4 pl-6 pr-14 outline-none font-medium text-slate-800 placeholder:text-slate-300"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-            <button className="absolute right-2 p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 active:scale-95 transition-all">
-              {loading ? <Loader2 className="animate-spin" size={20} /> : <Search size={20} />}
-            </button>
-          </form>
-          {loading && <ProgressBar progress={progress} />}
-        </div>
+          {/* Search Box */}
+          <div className="relative group">
+            <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-[2.5rem] blur opacity-20 group-hover:opacity-30 transition duration-1000"></div>
+            <form 
+              onSubmit={handleSearch}
+              className="relative bg-white border border-slate-100 rounded-[2rem] p-2 flex items-center shadow-2xl shadow-indigo-100/50"
+            >
+              <div className="pl-6 text-slate-400">
+                <LinkIcon size={20} />
+              </div>
+              <input
+                type="text"
+                placeholder="Tempel link video/musik di sini..."
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                className="flex-1 px-4 py-4 bg-transparent outline-none font-medium text-slate-700 placeholder:text-slate-300"
+              />
+              <button
+                disabled={loading || !url}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 text-white p-4 rounded-[1.5rem] transition-all shadow-lg shadow-indigo-200 active:scale-95"
+              >
+                {loading ? <Loader2 className="animate-spin" size={24} /> : <Search size={24} />}
+              </button>
+            </form>
+            
+            <AnimatePresence>
+              {loading && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }} 
+                  animate={{ opacity: 1, y: 0 }} 
+                  exit={{ opacity: 0 }}
+                  className="absolute -bottom-8 left-6 right-6"
+                >
+                  <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                    <motion.div 
+                      className="h-full bg-indigo-500"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Platform Support Icons */}
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
+            {[Youtube, Instagram, Facebook, Music, Video, ImageIcon].map((Icon, i) => (
+              <div key={i} className="flex justify-center p-4 bg-white border border-slate-50 rounded-2xl shadow-sm">
+                <Icon size={20} />
+              </div>
+            ))}
+          </div>
+        </motion.div>
       </main>
 
-      {/* POPUP DOWNLOAD (FIX DESKTOP CENTER & MOBILE SLIDE) */}
+      {/* Footer Signature */}
+      <footer className="py-10 text-center">
+        <a href="https://ariyo.my.id" className="text-xs font-bold tracking-widest text-slate-300 hover:text-indigo-400 transition-colors uppercase">
+          Crafted by Ariyo
+        </a>
+      </footer>
+
+      {/* Result Modal - Smooth Overlay */}
       <AnimatePresence>
         {data && (
           <>
-            {/* Backdrop dengan blur minimal biar enteng */}
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }}
               onClick={() => setData(null)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60]"
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40"
             />
-            
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-[3rem] shadow-2xl max-h-[92vh] overflow-y-auto"
+            >
+              <div className="max-w-xl mx-auto px-6 pb-12">
+                <div className="sticky top-0 bg-white pt-6 pb-4 mb-2 flex justify-between items-center border-b border-slate-50">
+                  <span className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Hasil Pencarian</span>
+                  <button onClick={() => setData(null)} className="p-2 bg-slate-50 rounded-full hover:bg-slate-100 transition-colors">
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="py-4">
+                  {renderContent()}
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
             <motion.div
               initial={{ y: "100%", opacity: 0.5 }}
               animate={{ y: 0, opacity: 1 }}
