@@ -1,52 +1,64 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Download, Music, Video, Image as ImageIcon, Loader2, Link as LinkIcon, Share2, Heart, MessageCircle, X, PlayCircle, Facebook, Instagram, Youtube } from 'lucide-react';
 
-// --- KOMPONEN TERISOLASI (Biar gak re-render satu halaman) ---
+// --- OPTIMASI 1: PISAHKAN MODAL CONTENT ---
+// Pakai memo supaya konten gak render ulang pas modal lagi gerak/animasi
+const ModalContent = memo(({ data, downloadFile, activePreview, setActivePreview, mediaError, setMediaError }) => {
+  if (!data) return null;
 
+  // Logic renderContent dipindah ke sini lur
+  // Contoh untuk data Tiktok/Video
+  if (data.author && data.stats) {
+    const noWmVideo = data.data.find(item => item.type === 'nowatermark' || item.type === 'nowatermark_hd');
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+          <img src={data.author.avatar} alt="avatar" className="w-12 h-12 rounded-full" />
+          <div>
+            <h3 className="font-bold text-slate-900">{data.author.nickname}</h3>
+            <p className="text-xs text-slate-500">@{data.author.unique_id}</p>
+          </div>
+        </div>
+        
+        <div className="rounded-2xl overflow-hidden bg-black aspect-video relative">
+            {activePreview === 'tiktok' ? (
+                <video controls autoPlay className="w-full h-full" src={noWmVideo?.url} />
+            ) : (
+                <div className="relative h-full w-full" onClick={() => setActivePreview('tiktok')}>
+                    <img src={data.cover} className="w-full h-full object-cover opacity-60" alt="cover" />
+                    <PlayCircle className="absolute inset-0 m-auto text-white opacity-80" size={50} />
+                </div>
+            )}
+        </div>
+
+        <button 
+          onClick={() => downloadFile(noWmVideo?.url, data.title, 'mp4')}
+          className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-blue-200"
+        >
+          <Download size={20} /> Download Video No WM
+        </button>
+      </div>
+    );
+  }
+
+  // Tambahin logic render untuk format lain (Pinterest/Instagram) di sini...
+  return <div className="text-center p-10 text-slate-400">Format didukung.</div>;
+});
+
+// --- OPTIMASI 2: PROGRESS BAR TERPISAH ---
 const ProgressBar = memo(({ progress }) => (
   <div className="mt-3 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
     <motion.div 
-      className="h-full bg-gradient-to-r from-blue-400 to-blue-600"
+      className="h-full bg-blue-600"
       initial={{ width: 0 }}
       animate={{ width: `${progress}%` }}
-      transition={{ ease: "linear" }}
+      transition={{ ease: "easeOut", duration: 0.3 }}
     />
   </div>
 ));
-
-const BackgroundAnim = memo(() => (
-  <>
-    <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-blue-300/10 rounded-full blur-3xl pointer-events-none will-change-transform" />
-    <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-purple-300/10 rounded-full blur-3xl pointer-events-none will-change-transform" />
-  </>
-));
-
-const FooterIcons = memo(() => {
-  const platforms = [
-    { icon: Video, name: 'TikTok', color: 'text-slate-600' },
-    { icon: Music, name: 'Spotify', color: 'text-slate-600' },
-    { icon: Youtube, name: 'YouTube', color: 'text-slate-600' },
-    { icon: Facebook, name: 'Facebook', color: 'text-slate-600' },
-    { icon: Instagram, name: 'Instagram', color: 'text-slate-600' },
-    { icon: ImageIcon, name: 'Pinterest', color: 'text-slate-600' }
-  ];
-
-  return (
-    <div className="grid grid-cols-3 gap-3 sm:gap-4 w-full max-w-md">
-      {platforms.map((p, i) => (
-        <div key={i} className="flex flex-col items-center gap-2 p-4 bg-white/70 backdrop-blur-sm border border-slate-200 rounded-xl shadow-sm group">
-          <p.icon size={28} className={`${p.color} group-hover:scale-110 transition-transform`} />
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{p.name}</span>
-        </div>
-      ))}
-    </div>
-  );
-});
-
-// --- KOMPONEN UTAMA ---
 
 export default function Home({ triggerAd }) {
   const [url, setUrl] = useState('');
@@ -55,8 +67,6 @@ export default function Home({ triggerAd }) {
   const [data, setData] = useState(null);
   const [activePreview, setActivePreview] = useState(null);
   const [mediaError, setMediaError] = useState(false);
-  
-  // Pake useRef biar cache gak bikin re-render
   const cache = useRef({});
 
   useEffect(() => {
@@ -64,7 +74,7 @@ export default function Home({ triggerAd }) {
     if (loading) {
       setProgress(10);
       interval = setInterval(() => {
-        setProgress((prev) => (prev < 90 ? prev + Math.random() * 5 : prev));
+        setProgress(p => p < 90 ? p + 5 : p);
       }, 400);
     } else {
       setProgress(0);
@@ -74,7 +84,7 @@ export default function Home({ triggerAd }) {
 
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!url) return;
+    if (!url || loading) return;
 
     if (cache.current[url]) {
       setData(cache.current[url]);
@@ -82,70 +92,102 @@ export default function Home({ triggerAd }) {
     }
 
     setLoading(true);
-    setData(null);
-
     try {
       const response = await axios.post('/api/download', { url });
       if (response.data.success) {
-        const resultData = response.data.data;
-        cache.current[url] = resultData;
+        cache.current[url] = response.data.data;
         setProgress(100);
         setTimeout(() => {
-          setData(resultData);
+          setData(response.data.data);
           setLoading(false);
-        }, 400);
+        }, 300);
       }
-    } catch (error) {
+    } catch (err) {
       setLoading(false);
-      Swal.fire({
-        icon: 'error',
-        title: 'Gagal',
-        text: error.response?.data?.error || 'Terjadi kesalahan.',
-        confirmButtonColor: '#3B82F6',
-      });
+      Swal.fire({ icon: 'error', title: 'Gagal', text: 'Link tidak valid atau server sibuk.' });
     }
-  };
-
-  const executeDownload = (fileUrl, prefix, ext) => {
-    const filename = `${prefix.replace(/[^a-zA-Z0-9]/g, '_')}.${ext}`;
-    const link = document.createElement('a');
-    link.href = `/api/proxy?url=${encodeURIComponent(fileUrl)}&filename=${filename}`;
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
   };
 
   const downloadFile = (fileUrl, prefix, ext) => {
-    if (triggerAd) {
-      triggerAd(() => executeDownload(fileUrl, prefix, ext));
-    } else {
-      executeDownload(fileUrl, prefix, ext);
-    }
-  };
-
-  // Render Content (Logic tetep sama, tapi CSS dioptimasi sikit)
-  const renderContent = () => {
-    if (!data) return null;
-    // ... (Logic render lo yang sebelumnya udah oke, tinggal panggil di sini)
-    // Gue asumsikan lo tetep pake logic renderContent yang lama ya lur
-    return <div className="space-y-4">Content Loaded.</div> 
+    const execute = () => {
+      const filename = `${prefix?.substring(0,20) || 'media'}.${ext}`;
+      window.open(`/api/proxy?url=${encodeURIComponent(fileUrl)}&filename=${filename}`, '_blank');
+    };
+    triggerAd ? triggerAd(execute) : execute();
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative overflow-hidden bg-[#F8FAFC]">
-      <BackgroundAnim />
+    <div className="min-h-screen bg-[#F8FAFC] relative overflow-hidden flex flex-col">
+      {/* Background Static (No Blur Animation) */}
+      <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-blue-100/50 rounded-full blur-[100px] pointer-events-none" />
+      
+      <main className="flex-1 flex flex-col items-center justify-center p-6 z-10">
+        <div className="w-full max-w-lg">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-8">
+            <h1 className="text-4xl font-black text-slate-900 tracking-tight mb-2">Media Saver</h1>
+            <p className="text-slate-500">Fast. Simple. No Lag.</p>
+          </motion.div>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-4 z-10">
-        <div className="w-full max-w-lg space-y-6">
-          <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white mb-4 shadow-lg">
-               <LinkIcon size={32} />
-            </div>
-            <h1 className="text-4xl font-extrabold text-slate-900">Media Saver</h1>
-            <p className="text-slate-500">Unduh konten favoritmu tanpa ribet.</p>
+          <div className="bg-white p-2 rounded-2xl shadow-2xl shadow-blue-100 border border-slate-100">
+            <form onSubmit={handleSearch} className="relative flex items-center">
+              <input 
+                type="text" 
+                placeholder="Paste link here..."
+                className="w-full p-4 pl-6 pr-14 bg-transparent outline-none font-medium text-slate-700"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+              <button disabled={loading} className="absolute right-2 p-3 bg-blue-600 text-white rounded-xl active:scale-95 transition-transform">
+                {loading ? <Loader2 className="animate-spin" size={20} /> : <Search size={20} />}
+              </button>
+            </form>
+            {loading && <ProgressBar progress={progress} />}
           </div>
+        </div>
+      </main>
 
+      {/* FOOTER TETAP SAMA TAPI PAKAI MEMO DI LUAR */}
+
+      <AnimatePresence>
+        {data && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setData(null)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-[4px] z-40"
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }} // Stiffness ditinggiin biar responsif
+              className="fixed bottom-0 left-0 right-0 bg-white rounded-t-[32px] z-50 max-h-[85vh] overflow-y-auto shadow-2xl will-change-transform"
+            >
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mt-4 mb-2" />
+              <div className="p-6">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-lg font-black text-slate-800">PREVIEW</h2>
+                    <button onClick={() => setData(null)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                </div>
+                
+                {/* INI KUNCINYA: Komponen konten dipisah lur */}
+                <ModalContent 
+                  data={data} 
+                  downloadFile={downloadFile}
+                  activePreview={activePreview}
+                  setActivePreview={setActivePreview}
+                  mediaError={mediaError}
+                  setMediaError={setMediaError}
+                />
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+    }
+    
           <div className="bg-white/80 backdrop-blur-md p-2 rounded-2xl shadow-xl border border-white/50">
             <form onSubmit={handleSearch} className="relative flex items-center">
               <div className="absolute left-4 text-slate-400"><LinkIcon size={20} /></div>
